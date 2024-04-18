@@ -214,6 +214,11 @@ def generate_freecell_game(card_images):
     transform = build_game_transform()
     return transform(image=ret_image, bboxes=ret_bounding_boxes, class_labels=ret_labels)
 
+def write_object_data(file, bboxes, class_labels):
+    "Write data in the format <object-class> <x_center> <y_center> <width> <height>"
+    for (bbox, class_label) in zip(bboxes, class_labels, strict=True):
+        file.write(f"{class_label} {bbox[0]} {bbox[1]} {bbox[2]} {bbox[3]}\n")
+
 def generate_many_games(num_to_generate):
     card_images = get_card_images()
     for i in range(0, num_to_generate):
@@ -221,7 +226,13 @@ def generate_many_games(num_to_generate):
             print(f"Processing {i} of {num_to_generate}")
         game = generate_freecell_game(card_images)
         game_image = game["image"]
+        bboxes_coco = game["bboxes"]
+        bboxes_albumentations = a.core.bbox_utils.convert_bboxes_to_albumentations(bboxes_coco, "coco", game_image.shape[0], game_image.shape[1])
+        bboxes_yolo = a.core.bbox_utils.convert_bboxes_from_albumentations(bboxes_coco, "yolo", game_image.shape[0], game_image.shape[1])
         cv2.imwrite(f"games/{str(i)}.png", game_image)
+        with open(f"games/{str(i)}.txt", "w") as file:
+            write_object_data(file, bboxes_yolo, game["class_labels"])
+
 
 
 
