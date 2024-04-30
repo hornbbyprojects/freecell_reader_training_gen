@@ -241,25 +241,6 @@ def generate_many_games(num_to_generate,location="games"):
         with open(f"{location}/{str(i)}.txt", "w") as file:
             write_object_data(file, bboxes_yolo, game["class_labels"])
 
-def fix_file(filename):
-    with open(filename) as file:
-        [stem, txt] = filename.split(".")
-        assert(txt == "txt")
-        img_filename =  stem + ".png"
-        print(f"Reading {img_filename}")
-        image = cv2.imread(img_filename, cv2.IMREAD_UNCHANGED)
-        bboxes_converted_from_albu = []
-        obj_classes = []
-        for line in file:
-            [obj_class, x, y, w, h] = line.split(" ")
-            bboxes_converted_from_albu.append([float(x), float(y), float(w), float(h)])
-            obj_classes.append(obj_class)
-        bboxes_coco = a.core.bbox_utils.convert_bboxes_to_albumentations(bboxes_converted_from_albu, "yolo", image.shape[0], image.shape[1])
-        bboxes_albumentations = a.core.bbox_utils.convert_bboxes_to_albumentations(bboxes_coco, "coco", image.shape[0], image.shape[1])
-        bboxes_yolo = a.core.bbox_utils.convert_bboxes_from_albumentations(bboxes_albumentations, "yolo", image.shape[0], image.shape[1])
-        fixed_filename = stem + ".txt.fixed"
-        with open(fixed_filename, "w") as fixed_file:
-            write_object_data(fixed_file, bboxes_yolo, obj_classes)
 
 def print_train_txt(image_count):
     for i in range(0, image_count):
