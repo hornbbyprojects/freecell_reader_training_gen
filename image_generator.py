@@ -5,6 +5,7 @@ from enum import Enum
 import albumentations as a
 import os
 import math
+import pathlib
 
 def show(to_show):
     cv2.imshow('image', to_show)
@@ -72,7 +73,8 @@ def split_file(filename):
 def build_card_transform():
     return a.Compose([
         a.Rotate(limit=10, p=1),
-        a.Rotate(limit=30, p=0.10)
+        a.Rotate(limit=30, p=0.10),
+        a.RandomGamma(),
         ], bbox_params=a.BboxParams(format='coco', label_fields=["class_labels"]))
 
 def build_game_transform():
@@ -88,13 +90,15 @@ def build_game_transform():
 def class_to_string(class_number):
     suit_number = class_number // 13
     card_number = class_number % 13 + 1
-    match card_number:
-        case 1: card_text = "A"
-        case 11: card_text = "J"
-        case 12: card_text = "Q"
-        case 13: card_text = "K"
-        case _:
-            card_text = str(card_number)
+    card_text = str(card_number)
+    if card_number == 1:
+        card_text = "A"
+    if card_number == 11:
+        card_text = "J"
+    if card_number == 12:
+        card_text = "Q"
+    if card_number == 13:
+        card_text = "K"
     suit = SUIT_ORDER[suit_number]
     return f"{card_text}{suit.value[0]}"
 
@@ -173,7 +177,9 @@ def generate_freecell_game(card_images):
     border_space = card_height + BONUS_BORDER_SPACE
     height_needed = (CARD_VERTICAL_OFFSET + CARD_RANDOM_VERTICAL_OFFSET) * NUM_CARDS_IN_LONG_COLUMN + card_height * 2 + border_space * 2
     width_needed = (COLUMN_OFFSET + COLUMN_RANDOM_OFFSET + card_width) * NUM_COLUMNS + card_width * 2 + border_space * 2
-    background = get_random_background()
+    background = None
+    while background is None:
+        background = get_random_background()
     background_vertical_repeat = max(1, math.ceil(height_needed / background.shape[0]))
     background_horizontal_repeat = max(1, math.ceil(width_needed / background.shape[1]))
     ret_image = cv2.repeat(background, background_horizontal_repeat, background_horizontal_repeat)
@@ -216,10 +222,12 @@ def generate_freecell_game(card_images):
 
 def write_object_data(file, bboxes, class_labels):
     "Write data in the format <object-class> <x_center> <y_center> <width> <height>"
-    for (bbox, class_label) in zip(bboxes, class_labels, strict=True):
+    if len(bboxes) != len(class_labels):
+        raise Exception(f"Mismatch: {len(bboxes)} bboxes vs {len(class_labels)} class_labels")
+    for (bbox, class_label) in zip(bboxes, class_labels):
         file.write(f"{class_label} {bbox[0]} {bbox[1]} {bbox[2]} {bbox[3]}\n")
 
-def generate_many_games(num_to_generate):
+def generate_many_games(num_to_generate,location="games"):
     card_images = get_card_images()
     for i in range(0, num_to_generate):
         if i % 100 == 0:
@@ -228,11 +236,34 @@ def generate_many_games(num_to_generate):
         game_image = game["image"]
         bboxes_coco = game["bboxes"]
         bboxes_albumentations = a.core.bbox_utils.convert_bboxes_to_albumentations(bboxes_coco, "coco", game_image.shape[0], game_image.shape[1])
-        bboxes_yolo = a.core.bbox_utils.convert_bboxes_from_albumentations(bboxes_coco, "yolo", game_image.shape[0], game_image.shape[1])
-        cv2.imwrite(f"games/{str(i)}.png", game_image)
-        with open(f"games/{str(i)}.txt", "w") as file:
+        bboxes_yolo = a.core.bbox_utils.convert_bboxes_from_albumentations(bboxes_albumentations, "yolo", game_image.shape[0], game_image.shape[1])
+        cv2.imwrite(f"{location}/{str(i)}.png", game_image)
+        with open(f"{location}/{str(i)}.txt", "w") as file:
             write_object_data(file, bboxes_yolo, game["class_labels"])
 
+def fix_file(filename):
+    with open(filename) as file:
+        [stem, txt] = filename.split(".")
+        assert(txt == "txt")
+        img_filename =  stem + ".png"
+        print(f"Reading {img_filename}")
+        image = cv2.imread(img_filename, cv2.IMREAD_UNCHANGED)
+        bboxes_converted_from_albu = []
+        obj_classes = []
+        for line in file:
+            [obj_class, x, y, w, h] = line.split(" ")
+            bboxes_converted_from_albu.append([float(x), float(y), float(w), float(h)])
+            obj_classes.append(obj_class)
+        bboxes_coco = a.core.bbox_utils.convert_bboxes_to_albumentations(bboxes_converted_from_albu, "yolo", image.shape[0], image.shape[1])
+        bboxes_albumentations = a.core.bbox_utils.convert_bboxes_to_albumentations(bboxes_coco, "coco", image.shape[0], image.shape[1])
+        bboxes_yolo = a.core.bbox_utils.convert_bboxes_from_albumentations(bboxes_albumentations, "yolo", image.shape[0], image.shape[1])
+        fixed_filename = stem + ".txt.fixed"
+        with open(fixed_filename, "w") as fixed_file:
+            write_object_data(fixed_file, bboxes_yolo, obj_classes)
+
+def print_train_txt(image_count):
+    for i in range(0, image_count):
+        print(f"data/obj/{i}.png")
 
 
 
