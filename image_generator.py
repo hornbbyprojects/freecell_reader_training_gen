@@ -84,21 +84,14 @@ def build_game_transform():
         a.GaussNoise(),
         a.RandomGamma(),
         a.RandomShadow(),
-        a.RandomToneCurve()
+        a.RandomToneCurve(),
         ], bbox_params=a.BboxParams(format='coco', label_fields=["class_labels"]))
 
+CARD_TEXTS=["A"] + list(map(lambda x: str(x), list(range(2,11)))) + ["J", "Q", "K"]
 def class_to_string(class_number):
     suit_number = class_number // 13
     card_number = class_number % 13 + 1
-    card_text = str(card_number)
-    if card_number == 1:
-        card_text = "A"
-    if card_number == 11:
-        card_text = "J"
-    if card_number == 12:
-        card_text = "Q"
-    if card_number == 13:
-        card_text = "K"
+    card_text = card_texts[card_number]
     suit = SUIT_ORDER[suit_number]
     return f"{card_text}{suit.value[0]}"
 
@@ -117,22 +110,23 @@ def draw_bounding_boxes_on_image(image, bounding_boxes, labels = None):
         if labels is not None:
             cv2.putText(image, text=class_to_string(labels[i]), org=(int(x), int(y)), fontFace=cv2.FONT_HERSHEY_PLAIN, fontScale=1, color=cv2.COLORMAP_INFERNO)
 
-def draw_base_card():
-    card = cv2.imread("cards/1.png")
-    cv2.rectangle(card, (2, 3),(7,20), (0, 255, 0))
-    show(card)
-
 def get_card_images():
-    "Get card images, leaving alpha channel intact"
+    "Get card images, leaving alpha channel intact. Returns an array of decks, each an array 52 long."
+
+    decks = os.listdir("cards")
     ret = []
-    for i in range(0, 52):
-        ret.append(cv2.imread(f"cards/{i}.png", cv2.IMREAD_UNCHANGED))
-    return ret
+    for deck_folder_name in decks:
+        deck = []
+        for i in range(0, 52):
+            deck.append(cv2.imread(f"cards/{deck_folder_name}/{i}.png", cv2.IMREAD_UNCHANGED))
+        ret.append(deck)
+    return ret;
 
 def overlay_card(base_img, card_image, x, y):
     "Overlays a card, skipping pixels that are fully transparent. Partial transparency is ignored. x any y coordinates of top left of card dest"
     card_height = card_image.shape[0]
     card_width = card_image.shape[1]
+    card_channels = card_image.shape[2]
     cutout=base_img[y:y+card_height, x:x+card_width, :]
     card_without_transparency = card_image[:,:,0:3]
     non_transparent = (card_image[:,:,3] != 0).astype("uint8")
@@ -163,55 +157,73 @@ def get_random_background():
 
 COLUMN_OFFSET=30
 COLUMN_RANDOM_OFFSET=50
-CARD_VERTICAL_OFFSET=20
-CARD_RANDOM_VERTICAL_OFFSET = 20
+CARD_VERTICAL_OFFSET_PROPORTION = 0.2
+CARD_RANDOM_VERTICAL_OFFSET_PROPORTION = 0.2
 CARD_HORIZONTAL_JITTER = 10
 NUM_CARDS_IN_LONG_COLUMN = 7
 NUM_CARDS_IN_SHORT_COLUMN = 6
 NUM_COLUMNS = 8
 NUM_LONG_COLUMNS = 4
 BONUS_BORDER_SPACE = 0
-def generate_freecell_game(card_images):
-    card_width = card_images[0].shape[1]
-    card_height = card_images[0].shape[0]
-    border_space = card_height + BONUS_BORDER_SPACE
-    height_needed = (CARD_VERTICAL_OFFSET + CARD_RANDOM_VERTICAL_OFFSET) * NUM_CARDS_IN_LONG_COLUMN + card_height * 2 + border_space * 2
-    width_needed = (COLUMN_OFFSET + COLUMN_RANDOM_OFFSET + card_width) * NUM_COLUMNS + card_width * 2 + border_space * 2
-    background = None
-    while background is None:
-        background = get_random_background()
+def get_output_image_dimensions(card_width: int, card_height: int) -> tuple[int, int, int]:
+    max_vertical_offset_per_card = (CARD_RANDOM_VERTICAL_OFFSET_PROPORTION + CARD_VERTICAL_OFFSET_PROPORTION) * card_height
+    extra_space_for_transforms = max(card_width, card_height) * 2
+    max_column_height = card_height + max_vertical_offset_per_card * NUM_CARDS_IN_LONG_COLUMN
+    max_column_width = COLUMN_OFFSET + COLUMN_RANDOM_OFFSET + card_width
+    border_space = BONUS_BORDER_SPACE + extra_space_for_transforms
+    total_vertical_space = border_space * 2 + max_column_height
+    total_horizontal_space = border_space * 2 + max_column_width * NUM_COLUMNS
+    return (int(border_space), int(total_horizontal_space), int(total_vertical_space))
+
+def tile_background_to_size(background, width_needed, height_needed):
     background_vertical_repeat = max(1, math.ceil(height_needed / background.shape[0]))
     background_horizontal_repeat = max(1, math.ceil(width_needed / background.shape[1]))
     ret_image = cv2.repeat(background, background_horizontal_repeat, background_horizontal_repeat)
     ret_image = ret_image[0:height_needed, 0:width_needed,:]
+    return ret_image
+
+def get_next_column_x(this_column_x: int, card_width: int) -> int:
+    return this_column_x + card_width + COLUMN_OFFSET + random.randrange(0, COLUMN_RANDOM_OFFSET)
+
+def get_next_card_y(this_card_y: int, card_height: int) -> int:
+    return (this_card_y
+            + CARD_VERTICAL_OFFSET_PROPORTION * card_height
+            + random.randrange(0, int(CARD_RANDOM_VERTICAL_OFFSET_PROPORTION * card_height)))
+
+def generate_freecell_game(card_images):
+    card_width = card_images[0].shape[1]
+    card_height = card_images[0].shape[0]
+    (border_space, width_needed, height_needed) = get_output_image_dimensions(card_width, card_height)
+    print(f"Generating game with dimensions {width_needed}, {height_needed}")
+    background = None
+    while background is None:
+        background = get_random_background()
+
+    ret_image = tile_background_to_size(background, width_needed, height_needed)
+
     ret_bounding_boxes = []
     ret_labels = []
-    # First, let's just generate with all cards
     cards = list(range(0,52))
     random.shuffle(cards)
     column_x = border_space
     card_transform = build_card_transform()
-    # card_transform = lambda image, bboxes, class_labels: {"image": image, "bboxes": bboxes, "class_labels": class_labels}
     for column in range(0, NUM_COLUMNS):
-        column_x += card_width
-        column_x += COLUMN_OFFSET
-        column_x += random.randrange(0, COLUMN_RANDOM_OFFSET)
-        cards_needed = NUM_CARDS_IN_SHORT_COLUMN
+        column_x = get_next_column_x(column_x, card_width)
         if column < NUM_LONG_COLUMNS:
             cards_needed = NUM_CARDS_IN_LONG_COLUMN
+        else:
+            cards_needed = NUM_CARDS_IN_SHORT_COLUMN
         card_y = border_space
         for card_number in range(0, cards_needed):
-            card_x = column_x
-            card_x += random.randrange(-CARD_HORIZONTAL_JITTER, CARD_HORIZONTAL_JITTER)
-            card_y += CARD_VERTICAL_OFFSET
-            card_y += random.randrange(0, CARD_RANDOM_VERTICAL_OFFSET)
+            card_x = column_x + random.randrange(-CARD_HORIZONTAL_JITTER, CARD_HORIZONTAL_JITTER)
+            card_y = get_next_card_y(card_y, card_height)
             next_card = cards.pop()
             card_image = card_images[next_card]
             card_image_with_border = add_border_to_image(card_image, card_image.shape[0])
-            card_bounding_boxes = get_card_bounding_boxes(card_image.shape[0], card_image.shape[0])
+            card_bounding_boxes = get_card_bounding_boxes(card_image.shape[1], card_image.shape[0])
             card_transformed = card_transform(image=card_image_with_border, bboxes=card_bounding_boxes, class_labels=[next_card])
             transformed_bounding_boxes = card_transformed["bboxes"]
-            draw_card_x = int(card_x - card_image.shape[0])
+            draw_card_x = int(card_x - card_image.shape[1])
             draw_card_y = int(card_y - card_image.shape[0])
             translated_boxes = list(translate_bounding_boxes(transformed_bounding_boxes, draw_card_x, draw_card_y))
             ret_bounding_boxes.extend(translated_boxes)
@@ -232,7 +244,7 @@ def generate_many_games(num_to_generate,location="games"):
     for i in range(0, num_to_generate):
         if i % 100 == 0:
             print(f"Processing {i} of {num_to_generate}")
-        game = generate_freecell_game(card_images)
+        game = generate_freecell_game(card_images[random.randrange(0, len(card_images))])
         game_image = game["image"]
         bboxes_coco = game["bboxes"]
         bboxes_albumentations = a.core.bbox_utils.convert_bboxes_to_albumentations(bboxes_coco, "coco", game_image.shape[0], game_image.shape[1])
@@ -246,5 +258,5 @@ def print_train_txt(image_count):
     for i in range(0, image_count):
         print(f"data/obj/{i}.png")
 
-
-
+if __name__ == "__main__":
+    generate_many_games(10)
