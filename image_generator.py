@@ -144,9 +144,13 @@ def read_bounding_box_file(filename):
             raise Exception(f"Expected 1 or 52 bounding boxes in {filename}, got {len(ret)}")
         return ret
 
+def get_limit_card_size_transform():
+    return a.Compose([a.LongestMaxSize(100)], bbox_params=a.BboxParams(format='coco', label_fields=["class_labels"]))
+
 
 def get_decks() -> List[Deck]:
     "Get card images and bounding box data, leaving alpha channel intact."
+    limit_transform = get_limit_card_size_transform()
     decks = os.listdir("cards")
     ret = []
     for deck_folder_name in decks:
@@ -155,6 +159,11 @@ def get_decks() -> List[Deck]:
         cards = []
         for i in range(0, 52):
             image = cv2.imread(f"cards/{deck_folder_name}/{i}.png", cv2.IMREAD_UNCHANGED)
+            if image.shape[0] > 100:
+                width_proportion = image.shape[1] / image.shape[0]
+                transformed = limit_transform(image=image, bboxes=[bounding_boxes[i]], class_labels=[0])
+                image = transformed["image"]
+                bounding_boxes[i] = transformed["bboxes"][0]
             cards.append(image)
         ret.append((bounding_boxes, cards))
     return ret;
@@ -311,4 +320,4 @@ def print_train_txt(image_count):
         print(f"data/obj/{i}.png")
 
 if __name__ == "__main__":
-    generate_many_games(10)
+    generate_many_games(10, generate_images_with_boxes=True)
