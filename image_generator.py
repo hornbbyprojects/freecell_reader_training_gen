@@ -6,6 +6,8 @@ import albumentations as a
 import os
 import math
 import pathlib
+import typing
+from typing import Tuple, List
 
 def show(to_show):
     cv2.imshow('image', to_show)
@@ -110,16 +112,51 @@ def draw_bounding_boxes_on_image(image, bounding_boxes, labels = None):
         if labels is not None:
             cv2.putText(image, text=class_to_string(labels[i]), org=(int(x), int(y)), fontFace=cv2.FONT_HERSHEY_PLAIN, fontScale=1, color=cv2.COLORMAP_INFERNO)
 
-def get_card_images():
-    "Get card images, leaving alpha channel intact. Returns an array of decks, each an array 52 long."
+Image = typing.Any
+BoundingBox = Tuple[int, int, int, int]
+Deck = Tuple[List[BoundingBox], List[Image]]
+def read_bounding_box_file(filename):
+    with open(filename) as bounding_boxes_file:
+        ret = []
+        while True:
+            next_line: str = bounding_boxes_file.readline()
+            if not next_line:
+                break
 
+            # Skip empty lines
+            trimmed = next_line.strip()
+            if not trimmed:
+                continue
+
+
+            if trimmed[0] != '[' or trimmed[-1] != ']':
+                raise Exception(f"Expected nonempty lines in {filename} to start with '[' and end with ']'")
+
+            bounding_boxes = list(map(lambda s: int(s), map(lambda x: x.strip(), trimmed[1:-1].split(","))))
+            if len(bounding_boxes) != 4:
+                raise Exception(f"Expected nonempty lines in {filename} to contain 4 comma seperated integer values, found {len(bounding_boxes)} values")
+
+            ret.append(bounding_boxes)
+
+        if len(ret) == 1:
+            ret = [ret[0] for i in range(0, 52)]
+        if len(ret) != 52:
+            raise Exception(f"Expected 1 or 52 bounding boxes in {filename}, got {len(ret)}")
+        return ret
+
+
+def get_decks() -> List[Deck]:
+    "Get card images and bounding box data, leaving alpha channel intact."
     decks = os.listdir("cards")
     ret = []
     for deck_folder_name in decks:
-        deck = []
+        bounding_boxes_file_name = f"cards/{deck_folder_name}/bounding_boxes.txt"
+        bounding_boxes = read_bounding_box_file(bounding_boxes_file_name)
+        cards = []
         for i in range(0, 52):
-            deck.append(cv2.imread(f"cards/{deck_folder_name}/{i}.png", cv2.IMREAD_UNCHANGED))
-        ret.append(deck)
+            image = cv2.imread(f"cards/{deck_folder_name}/{i}.png", cv2.IMREAD_UNCHANGED)
+            cards.append(image)
+        ret.append((bounding_boxes, cards))
     return ret;
 
 def overlay_card(base_img, card_image, x, y):
@@ -190,7 +227,9 @@ def get_next_card_y(this_card_y: int, card_height: int) -> int:
             + CARD_VERTICAL_OFFSET_PROPORTION * card_height
             + random.randrange(0, int(CARD_RANDOM_VERTICAL_OFFSET_PROPORTION * card_height)))
 
-def generate_freecell_game(card_images):
+def generate_freecell_game(deck: Deck):
+    bounding_boxes = deck[0]
+    card_images = deck[1]
     card_width = card_images[0].shape[1]
     card_height = card_images[0].shape[0]
     (border_space, width_needed, height_needed) = get_output_image_dimensions(card_width, card_height)
@@ -220,12 +259,14 @@ def generate_freecell_game(card_images):
             next_card = cards.pop()
             card_image = card_images[next_card]
             card_image_with_border = add_border_to_image(card_image, card_image.shape[0])
-            card_bounding_boxes = get_card_bounding_boxes(card_image.shape[1], card_image.shape[0])
+            card_bounding_boxes = [translate_bounding_box(bounding_boxes[next_card], card_image.shape[0], card_image.shape[0])]
             card_transformed = card_transform(image=card_image_with_border, bboxes=card_bounding_boxes, class_labels=[next_card])
             transformed_bounding_boxes = card_transformed["bboxes"]
             draw_card_x = int(card_x - card_image.shape[1])
             draw_card_y = int(card_y - card_image.shape[0])
             translated_boxes = list(translate_bounding_boxes(transformed_bounding_boxes, draw_card_x, draw_card_y))
+            if len(translated_boxes) != 1:
+                raise Exception("After transformation card had no bounding boxes!")
             ret_bounding_boxes.extend(translated_boxes)
             overlay_card(ret_image, card_transformed["image"], draw_card_x, draw_card_y)
             ret_labels.append(next_card)
@@ -240,16 +281,18 @@ def write_object_data(file, bboxes, class_labels):
         file.write(f"{class_label} {bbox[0]} {bbox[1]} {bbox[2]} {bbox[3]}\n")
 
 def generate_many_games(num_to_generate,location="games"):
-    card_images = get_card_images()
+    decks = get_decks()
     for i in range(0, num_to_generate):
         if i % 100 == 0:
             print(f"Processing {i} of {num_to_generate}")
-        game = generate_freecell_game(card_images[random.randrange(0, len(card_images))])
+        game = generate_freecell_game(decks[random.randrange(0, len(decks))])
         game_image = game["image"]
         bboxes_coco = game["bboxes"]
         bboxes_albumentations = a.core.bbox_utils.convert_bboxes_to_albumentations(bboxes_coco, "coco", game_image.shape[0], game_image.shape[1])
         bboxes_yolo = a.core.bbox_utils.convert_bboxes_from_albumentations(bboxes_albumentations, "yolo", game_image.shape[0], game_image.shape[1])
         cv2.imwrite(f"{location}/{str(i)}.png", game_image)
+        draw_bounding_boxes_on_image(game_image, bboxes_coco)
+        cv2.imwrite(f"{location}/{str(i)}_with_boxes.png", game_image)
         with open(f"{location}/{str(i)}.txt", "w") as file:
             write_object_data(file, bboxes_yolo, game["class_labels"])
 
