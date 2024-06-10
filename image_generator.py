@@ -280,7 +280,7 @@ def write_object_data(file, bboxes, class_labels):
     for (bbox, class_label) in zip(bboxes, class_labels):
         file.write(f"{class_label} {bbox[0]} {bbox[1]} {bbox[2]} {bbox[3]}\n")
 
-def generate_many_games(num_to_generate,location="games"):
+def generate_many_games(num_to_generate,location="games", generate_images_with_boxes=False):
     decks = get_decks()
     for i in range(0, num_to_generate):
         if i % 100 == 0:
@@ -291,8 +291,9 @@ def generate_many_games(num_to_generate,location="games"):
         bboxes_albumentations = a.core.bbox_utils.convert_bboxes_to_albumentations(bboxes_coco, "coco", game_image.shape[0], game_image.shape[1])
         bboxes_yolo = a.core.bbox_utils.convert_bboxes_from_albumentations(bboxes_albumentations, "yolo", game_image.shape[0], game_image.shape[1])
         cv2.imwrite(f"{location}/{str(i)}.png", game_image)
-        draw_bounding_boxes_on_image(game_image, bboxes_coco)
-        cv2.imwrite(f"{location}/{str(i)}_with_boxes.png", game_image)
+        if generate_images_with_boxes:
+            draw_bounding_boxes_on_image(game_image, bboxes_coco)
+            cv2.imwrite(f"{location}/{str(i)}_with_boxes.png", game_image)
         with open(f"{location}/{str(i)}.txt", "w") as file:
             write_object_data(file, bboxes_yolo, game["class_labels"])
 
