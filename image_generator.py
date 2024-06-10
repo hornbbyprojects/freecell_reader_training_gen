@@ -204,12 +204,12 @@ NUM_LONG_COLUMNS = 4
 BONUS_BORDER_SPACE = 0
 def get_output_image_dimensions(card_width: int, card_height: int) -> tuple[int, int, int]:
     max_vertical_offset_per_card = (CARD_RANDOM_VERTICAL_OFFSET_PROPORTION + CARD_VERTICAL_OFFSET_PROPORTION) * card_height
-    extra_space_for_transforms = max(card_width, card_height) * 2
+    extra_space_for_transforms = max(card_width, card_height)
     max_column_height = card_height + max_vertical_offset_per_card * NUM_CARDS_IN_LONG_COLUMN
     max_column_width = COLUMN_OFFSET + COLUMN_RANDOM_OFFSET + card_width
     border_space = BONUS_BORDER_SPACE + extra_space_for_transforms
     total_vertical_space = border_space * 2 + max_column_height
-    total_horizontal_space = border_space * 2 + max_column_width * NUM_COLUMNS
+    total_horizontal_space = card_width + border_space * 2 + max_column_width * NUM_COLUMNS
     return (int(border_space), int(total_horizontal_space), int(total_vertical_space))
 
 def tile_background_to_size(background, width_needed, height_needed):
@@ -233,7 +233,6 @@ def generate_freecell_game(deck: Deck):
     card_width = card_images[0].shape[1]
     card_height = card_images[0].shape[0]
     (border_space, width_needed, height_needed) = get_output_image_dimensions(card_width, card_height)
-    print(f"Generating game with dimensions {width_needed}, {height_needed}")
     background = None
     while background is None:
         background = get_random_background()
@@ -246,16 +245,22 @@ def generate_freecell_game(deck: Deck):
     random.shuffle(cards)
     column_x = border_space
     card_transform = build_card_transform()
+    first_column = True
     for column in range(0, NUM_COLUMNS):
-        column_x = get_next_column_x(column_x, card_width)
+        if not first_column:
+            column_x = get_next_column_x(column_x, card_width)
+        first_column = False
         if column < NUM_LONG_COLUMNS:
             cards_needed = NUM_CARDS_IN_LONG_COLUMN
         else:
             cards_needed = NUM_CARDS_IN_SHORT_COLUMN
         card_y = border_space
+        first_row = True
         for card_number in range(0, cards_needed):
             card_x = column_x + random.randrange(-CARD_HORIZONTAL_JITTER, CARD_HORIZONTAL_JITTER)
-            card_y = get_next_card_y(card_y, card_height)
+            if not first_row:
+                card_y = get_next_card_y(card_y, card_height)
+            first_row = False
             next_card = cards.pop()
             card_image = card_images[next_card]
             card_image_with_border = add_border_to_image(card_image, card_image.shape[0])
@@ -268,7 +273,10 @@ def generate_freecell_game(deck: Deck):
             if len(translated_boxes) != 1:
                 raise Exception("After transformation card had no bounding boxes!")
             ret_bounding_boxes.extend(translated_boxes)
-            overlay_card(ret_image, card_transformed["image"], draw_card_x, draw_card_y)
+            try:
+                overlay_card(ret_image, card_transformed["image"], draw_card_x, draw_card_y)
+            except Exception as e:
+                raise Exception(f"Failed to create a card at {draw_card_x}, {draw_card_y} due to card_x {card_x} ({column}) card_y {card_y} ({card_number}) shape {card_transformed['image'].shape} of {width_needed}, {height_needed}. Base card size is {card_image.shape}. column x is {column_x}. border space is {border_space}") from e
             ret_labels.append(next_card)
     transform = build_game_transform()
     return transform(image=ret_image, bboxes=ret_bounding_boxes, class_labels=ret_labels)
@@ -280,9 +288,9 @@ def write_object_data(file, bboxes, class_labels):
     for (bbox, class_label) in zip(bboxes, class_labels):
         file.write(f"{class_label} {bbox[0]} {bbox[1]} {bbox[2]} {bbox[3]}\n")
 
-def generate_many_games(num_to_generate,location="games", generate_images_with_boxes=False):
+def generate_many_games(num_to_generate,location="games", generate_images_with_boxes=False, start_at=0):
     decks = get_decks()
-    for i in range(0, num_to_generate):
+    for i in range(start_at, num_to_generate):
         if i % 100 == 0:
             print(f"Processing {i} of {num_to_generate}")
         game = generate_freecell_game(decks[random.randrange(0, len(decks))])
